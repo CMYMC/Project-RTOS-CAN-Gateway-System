@@ -1,4 +1,4 @@
-# RT-CAN Gateway System
+# RTOS-CAN Ethernet Gateway System
 **FreeRTOS 기반 CAN 네트워크 제어 및 임베디드 게이트웨이 프로젝트**
 
 > **STM32 + FreeRTOS 환경에서 다수의 임베디드 노드가 생성하는 CAN 데이터를
@@ -8,7 +8,7 @@
 
 ## 프로젝트 개요
 
-RT-CAN Gateway System은
+RTOS-CAN-Ethernet Gateway System은
 여러 임베디드 보드에서 발생하는 실시간 센서 데이터를 CAN Bus로 수집하고,
 중앙 제어 보드에서 이를 통합·가공하고 데이터 흐름을 제어한 뒤 이더넷 네트워크로 전달하는 시스템입니다.
 
