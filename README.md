@@ -1,5 +1,5 @@
 # RTOS-CAN Ethernet Gateway System
-**FreeRTOS 기반 CAN 네트워크 제어 및 임베디드 게이트웨이 프로젝트**
+**FreeRTOS 기반 CAN-Ethernet 데이터 중계 게이트웨이 프로젝트**
 
 > **STM32 + FreeRTOS 환경에서 다수의 임베디드 노드가 생성하는 CAN 데이터를
 중앙 게이트웨이에서 제어·통합하여 이더넷 기반 상위 시스템으로 전달하는 RTOS 기반 네트워크 프로젝트**
@@ -8,16 +8,16 @@
 
 ## 프로젝트 개요
 
-RTOS-CAN-Ethernet Gateway System은
-여러 임베디드 보드에서 발생하는 실시간 센서 데이터를 CAN Bus로 수집하고,
-중앙 제어 보드에서 이를 통합·가공하고 데이터 흐름을 제어한 뒤 이더넷 네트워크로 전달하는 시스템입니다.
+RTOS-CAN-Ethernet Gateway System은 FreeRTOS와 LwIP를 활용하여
+CAN으로 수신한 센서 데이터를 CAN ID 기준으로 분류하고,
+UDP 전송 데이터 형식으로 구성해 Raspberry Pi로 전달하는 임베디드 게이트웨이 시스템입니다.
 
-이 프로젝트의 핵심 목표는 다음과 같습니다.
+## 핵심 목표
 
 - FreeRTOS 기반 멀티 태스크 구조 설계
-- CAN 통신 + RTOS 이벤트 기반 동기화
-- 임베디드 시스템에서 네트워크 계층 개념 적용
-- 실시간성과 안정성을 고려한 게이트웨이 아키텍처 구현
+- CAN 통신 + RTOS Queue 기반 데이터 전달 구조
+- 임베디드 시스템에서 Ethernet/UDP 전송 구조 적용
+- 수신과 전송 처리를 분리한 게이트웨이 구조 구현
 
 ---
 
@@ -46,13 +46,10 @@ RTOS-CAN-Ethernet Gateway System은
 ---
 
 ## 담당 역할
-
-- FreeRTOS 기반 태스크 구조 설계
-- CAN 통신 송·수신 로직 구현
-- CAN 메시지 프레임 패킹 구조 설계
-- RTOS 동기화 메커니즘 (Semaphore / Event) 적용
-- 시스템 전체 데이터 흐름 정리 및 문서화
-
+- CAN RX 인터럽트 기반 수신 처리 구현
+- RTOS Message Queue를 활용한 데이터 전달 구조 구현
+- CAN ID 기반 데이터 분류 및 UDP 전송 데이터 구성
+- LwIP UDP 소켓을 활용한 Raspberry Pi IP/Port 송신 구현
 ---
 
 ## 수행 목표
@@ -85,15 +82,14 @@ RTOS-CAN-Ethernet Gateway System은
 
 ## 주요 구현 내용
 
-1️⃣ FreeRTOS 태스크 설계
+1️⃣ FreeRTOS 데이터 처리 구조
 
-- CAN 송신 Task
-- CAN 수신 Task
-- 데이터 처리 Task
-- 통신 이벤트 기반 Task 동기화
+- CAN RX 인터럽트에서 수신 데이터 확인
+- 수신 데이터를 RTOS Message Queue에 저장
+- Ethernet Task에서 Queue 데이터를 가져와 UDP 전송 데이터로 구성
+- 수신 처리와 전송 처리를 분리해 메인 흐름의 부담을 줄임
 
-👉 Event / Semaphore를 활용해
-CAN 수신 시 대기 중인 Task를 깨우는 구조로 설계
+👉 CAN RX ISR → RTOS Message Queue → Ethernet Task → UDP 송신 구조로 구현
 
 2️⃣ CAN 통신 구현
 
@@ -101,21 +97,26 @@ CAN 수신 시 대기 중인 Task를 깨우는 구조로 설계
 - CAN Filter 직접 설정
 - 메시지 ID 기반 데이터 분기 처리
 - 프레임 패킹을 통한 데이터 구조화
-
 ```c
-CAN_TxHeaderTypeDef TxHeader;
-TxHeader.StdId = 0x201;
-TxHeader.DLC = 8;
-TxHeader.IDE = CAN_ID_STD;
-TxHeader.RTR = CAN_RTR_DATA;
+typedef struct __attribute__((packed)) {
+    uint8_t  start_byte;
+    uint16_t can_id;
+    uint8_t  dlc;
+    uint8_t  data[8];
+} UdpPacket;
 ```
 
-3️⃣ RTOS + CAN 동기화 구조
+UDP Header는 LwIP가 sendto() 호출 시 자동으로 구성하며,
+위 구조체는 UDP Payload로 전송되는 사용자 데이터 영역입니다.
 
-- CAN Interrupt 발생
-- Event / Semaphore로 Task 깨움
-- Queue를 통해 데이터 전달
-- Task 간 자원 충돌 방지
+3️⃣ RTOS + CAN 데이터 전달 구조
+
+- CAN RX Interrupt 발생 시 수신 데이터 확인
+- 수신 데이터를 RTOS Message Queue에 저장
+- Ethernet Task에서 Queue 데이터를 가져와 UDP 전송 데이터로 구성
+- 수신 처리와 전송 처리를 분리해 구조를 단순화
+
+👉 CAN RX ISR → RTOS Message Queue → Ethernet Task → UDP 송신
 
 👉 RTOS 환경에서 실시간성 + 안정성 확보
 
@@ -152,17 +153,12 @@ DB에 스냅샷 형태로 저장한 결과입니다.
 
 ## 트러블슈팅
 
-### 1) Ethernet Task 스택 오버플로우 문제
-- **문제**: Ethernet 통신 Task 실행 중 시스템 불안정 및 HardFault 발생
-- **원인**  
-  - Ethernet Task에 할당된 스택 크기(2048 words)가 MCU의 가용 메모리 한계를 초과  
-  - LwIP 초기화 및 네트워크 버퍼 사용으로 스택 사용량 급증
-- **해결**  
-  - FreeRTOS Stack High Water Mark를 통해 태스크별 실제 스택 사용량 분석  
-  - Ethernet Task 스택 크기를 1024 words로 최적화  
-  - 불필요한 지역 변수 제거 및 네트워크 버퍼를 전역/동적 영역으로 분리
-- **결과**  
-  - 장시간 동작 시에도 안정적인 Ethernet 통신 확보
+### 1) Ethernet Task 생성 실패
+
+- **문제**: Ethernet Task가 정상적으로 생성되지 않는 문제 발생
+- **원인**: 제한된 MCU RAM 환경에서 Ethernet Task의 스택 크기를 과도하게 설정해 태스크 생성에 필요한 메모리를 확보하지 못함
+- **해결**: Ethernet Task의 처리 범위와 사용 변수 범위를 고려해 스택 크기를 1024 Words로 조정
+- **결과**: Ethernet Task가 정상적으로 생성되고 UDP 전송 루틴을 실행할 수 있음을 확인
 
 ### 2) FreeRTOS–HAL SysTick 자원 충돌로 인한 데드락
 - **문제**: RTOS 구동 후 Ethernet(LwIP) 초기화 과정에서 시스템이 멈추며 태스크 전환이 발생하지 않음
@@ -178,27 +174,16 @@ DB에 스냅샷 형태로 저장한 결과입니다.
   - 데드락 문제 해결  
   - CAN 및 Ethernet Task 병행 실행 시에도 RTOS 정상 동작
     
-### 3) CAN 수신 지연으로 인한 메시지 누락 문제
-- **문제**: 다수 노드에서 CAN 메시지를 송신할 경우 일부 메시지가 수신되지 않음
-- **원인**  
-  - CAN 수신을 polling 방식으로 처리하여 수신 처리 지연 발생  
-  - FIFO 적재 속도를 Task가 따라가지 못해 메시지 손실 발생
-- **해결**  
-  - CAN 수신을 Interrupt 기반 구조로 전환  
-  - 수신 인터럽트 발생 시 Event/Semaphore로 전용 처리 Task를 즉시 활성화  
-  - 메시지 처리와 통신 로직을 분리하여 수신 지연 최소화
-- **결과**  
-  - CAN 메시지 누락 현상 제거  
-  - 다중 노드 환경에서도 안정적인 데이터 수신 확보
-  - Queue 및 Semaphore를 활용해 Task 간 공유 자원 접근을 분리
+### 3) CAN 수신 처리 구조 개선
 
+- **개선 방향**: CAN 수신 처리를 Polling이 아닌 Interrupt 기반으로 구성
+- **구현**: CAN RX 인터럽트에서 수신 데이터를 Queue에 넣고, Ethernet Task에서 후속 처리를 수행
+- **의미**: 수신 처리와 전송 처리를 분리해 구조를 단순화하고 확장성을 높임
 ---
 
 ## 프로젝트를 진행하며 느낀점
 
-- RTOS 기반 환경에서 통신 제어 로직을 설계하는 경험
-- CAN 통신 필터링 및 프레임 구조에 대한 이해
-- 이벤트 기반 동기화를 통한 실시간 시스템 안정화
-- 스위치 및 게이트웨이가 수행하는 데이터 전달·제어 흐름(Control Plane)을 임베디드 시스템 관점에서 이해
-- 라우터를 포함한 네트워크 장비의 역할을 구조 중심으로 이해
-- 네트워크 토폴로지, 게이트웨이, 데이터 경로 분리에 대한 구조적 사고 능력 향상
+- RTOS 기반 환경에서 통신 데이터 흐름을 설계한 경험
+- CAN ID 기반 데이터 분류와 UDP 전송 데이터 구성에 대한 이해
+- Queue 기반 데이터 전달 구조를 통한 수신·전송 처리 분리 경험
+- LwIP 소켓을 활용한 IP/Port 기반 UDP 송신 구조 이해
